@@ -89,7 +89,18 @@ def make_request(id: str, t: str, tm: str, use_fresh_cookies: bool = False):
         'Sec-Fetch-Mode': 'cors',
         'Sec-Fetch-Site': 'same-origin',
         'TE': 'trailers',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+        # Try to spoof the IP address with common headers used for IP detection
+        'X-Forwarded-For': '172.31.128.52',
+        'X-Real-IP': '172.31.128.52',
+        'X-Client-IP': '172.31.128.52',
+        'X-Originating-IP': '172.31.128.52',
+        'CF-Connecting-IP': '172.31.128.52',
+        'True-Client-IP': '172.31.128.52',
+        # Add Replit-specific headers
+        'X-Replit-User-Id': '',
+        'X-Replit-User-Name': '',
+        'X-Replit-User-Roles': ''
     }
 
     if not use_fresh_cookies:
