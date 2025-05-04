@@ -3,6 +3,8 @@ import re
 import base64
 import logging
 from typing import Optional, List, Dict, Any, Union
+import os
+import random
 
 import requests
 from fastapi import FastAPI, Query, HTTPException, Depends, Request
@@ -20,7 +22,7 @@ logger = logging.getLogger("netfree_api")
 app = FastAPI(
     title="NetFree API",
     description="API to fetch content from netfree2.cc",
-    version="1.0.1"
+    version="1.0.2"
 )
 
 # Add CORS middleware
@@ -73,10 +75,66 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Response status: {response.status_code}")
     return response
 
+# List of common user agents to rotate through
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+]
+
+# Cookie store - in a production environment, this should be in a database or Redis
+# For simplicity, we'll store them in memory in this example
+COOKIES_CACHE = {
+    'default': 'user_token=c4e606ec3f66b93e8198a48c8c71e6b8; t_hash_t=4184321d319f63c93cff4c7588764623%3A%3A14b66f534e8c2fa68723668dead845ce%3A%3A1746367568%3A%3Ani; recentplay=81688854; 81688854=95%3A7065'
+}
+
+async def get_fresh_cookies():
+    """Function to get fresh cookies from the site"""
+    try:
+        session = requests.Session()
+        # Use a random user agent
+        headers = {
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'DNT': '1'
+        }
+        
+        # First visit homepage to get initial cookies
+        response = session.get('https://netfree2.cc/home', headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            # Extract the cookies as a string
+            cookie_dict = session.cookies.get_dict()
+            cookie_string = '; '.join([f'{k}={v}' for k, v in cookie_dict.items()])
+            logger.info(f"Successfully obtained fresh cookies: {cookie_string}")
+            
+            # Store in cache
+            COOKIES_CACHE['latest'] = cookie_string
+            return cookie_string
+        else:
+            logger.warning(f"Failed to get fresh cookies, status code: {response.status_code}")
+            return COOKIES_CACHE['default']
+    except Exception as e:
+        logger.error(f"Error getting fresh cookies: {str(e)}")
+        return COOKIES_CACHE['default']
+
 def make_request(id: str, t: str, tm: str, use_fresh_cookies: bool = False):
     url = f'https://netfree2.cc/playlist.php?id={id}&t={t}&tm={tm}'
     logger.info(f"Making request to {url}")
-
+    
+    # Get a random user agent
+    user_agent = random.choice(USER_AGENTS)
+    
     headers = {
         'Accept': '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
@@ -89,30 +147,51 @@ def make_request(id: str, t: str, tm: str, use_fresh_cookies: bool = False):
         'Sec-Fetch-Mode': 'cors',
         'Sec-Fetch-Site': 'same-origin',
         'TE': 'trailers',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
-        # Try to spoof the IP address with common headers used for IP detection
-        'X-Forwarded-For': '172.31.128.52',
-        'X-Real-IP': '172.31.128.52',
-        'X-Client-IP': '172.31.128.52',
-        'X-Originating-IP': '172.31.128.52',
-        'CF-Connecting-IP': '172.31.128.52',
-        'True-Client-IP': '172.31.128.52',
-        # Add Replit-specific headers
-        'X-Replit-User-Id': '',
-        'X-Replit-User-Name': '',
-        'X-Replit-User-Roles': ''
+        'User-Agent': user_agent
     }
 
-    if not use_fresh_cookies:
-        headers['Cookie'] = 'user_token=c4e606ec3f66b93e8198a48c8c71e6b8; t_hash_t=4184321d319f63c93cff4c7588764623%3A%3A14b66f534e8c2fa68723668dead845ce%3A%3A1746367568%3A%3Ani; recentplay=81688854; 81688854=95%3A7065'
+    # Handle cookies
+    cookie_string = COOKIES_CACHE.get('latest', COOKIES_CACHE['default']) if use_fresh_cookies else COOKIES_CACHE['default']
+    headers['Cookie'] = cookie_string
 
+    # Add X-Forwarded-For header with random IP to bypass IP-based restrictions
+    # This is a common technique, but use responsibly
+    forwarded_ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+    headers['X-Forwarded-For'] = forwarded_ip
+    
     try:
+        # Add proxy support for deployments
+        proxies = {}
+        if os.environ.get('HTTP_PROXY'):
+            proxies['http'] = os.environ.get('HTTP_PROXY')
+        if os.environ.get('HTTPS_PROXY'):
+            proxies['https'] = os.environ.get('HTTPS_PROXY')
+            
         logger.info(f"Headers being sent: {headers}")
-        response = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"Using proxies: {proxies if proxies else 'None'}")
+        
+        response = requests.get(
+            url, 
+            headers=headers, 
+            timeout=15,
+            proxies=proxies if proxies else None,
+            allow_redirects=True
+        )
+        
         logger.info(f"Response status code: {response.status_code}")
         logger.info(f"Response headers: {response.headers}")
         content_preview = response.content[:200] if isinstance(response.content, bytes) else "Non-bytes response"
         logger.info(f"Response content preview: {content_preview}")
+
+        # Save any new cookies we received
+        if response.cookies and use_fresh_cookies:
+            new_cookies = '; '.join([f"{name}={value}" for name, value in response.cookies.items()])
+            if new_cookies:
+                if 'latest' in COOKIES_CACHE:
+                    COOKIES_CACHE['latest'] += '; ' + new_cookies
+                else:
+                    COOKIES_CACHE['latest'] = new_cookies
+                logger.info(f"Updated cookie cache with new cookies: {new_cookies}")
 
         return {
             'http_code': response.status_code,
@@ -206,6 +285,22 @@ def process_response(response_raw):
             'data': response_str
         }
 
+@app.get("/refresh-cookies")
+async def refresh_cookies():
+    """Endpoint to manually refresh the cookies cache"""
+    try:
+        new_cookies = await get_fresh_cookies()
+        return {
+            "status": "success",
+            "message": "Cookies refreshed successfully",
+            "cookies_length": len(new_cookies)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to refresh cookies: {str(e)}"
+        }
+
 @app.get("/playlist/", response_model=ApiResponse)
 async def get_playlist(
     id: str = Query(..., description="Content ID"),
@@ -214,10 +309,24 @@ async def get_playlist(
     fresh_cookies: bool = Query(False, description="Use fresh cookies instead of saved ones")
 ):
     logger.info(f"Request received for ID: {id}, Title: {t}, TM: {tm}, Fresh cookies: {fresh_cookies}")
+    
+    # If using fresh cookies, make sure we have them
+    if fresh_cookies and 'latest' not in COOKIES_CACHE:
+        await get_fresh_cookies()
+    
     request_result = make_request(id, t, tm, fresh_cookies)
     response_raw = request_result['response']
     http_code = request_result['http_code']
     error_message = request_result['error']
+
+    # If we get an error that could be due to expired cookies, try refreshing them
+    if (http_code >= 400 or error_message) and fresh_cookies:
+        logger.info("Request failed, trying to refresh cookies and retry")
+        await get_fresh_cookies()
+        request_result = make_request(id, t, tm, True)  # Use fresh cookies
+        response_raw = request_result['response']
+        http_code = request_result['http_code']
+        error_message = request_result['error']
 
     processed_data = process_response(response_raw)
     if isinstance(processed_data, dict) and processed_data.get('type') == 'json':
@@ -251,14 +360,16 @@ async def root():
         "usage": "Make GET requests to /playlist/ with id, t, and tm parameters",
         "example": "/playlist/?id=81900595&t=Mad%20Square&tm=14170286",
         "options": "Add fresh_cookies=true to use fresh cookies instead of saved ones",
-        "debug": "Check server logs for detailed request/response information"
+        "cookie_refresh": "/refresh-cookies to manually refresh the cookie cache",
+        "debug": "Check server logs for detailed request/response information",
+        "version": "1.0.2"
     }
 
 @app.get("/health")
 async def health_check():
     return {
         "status": "ok",
-        "version": "1.0.1"
+        "version": "1.0.2"
     }
 
 @app.get("/hls/", response_model=HLSResponse)
@@ -309,10 +420,24 @@ async def example_request(fresh_cookies: bool = Query(False, description="Use fr
 async def debug_headers(request: Request):
     return {
         "headers": dict(request.headers),
-        "client": request.client.host
+        "client": request.client.host,
+        "cookies_cache_status": {
+            "default_cookie_length": len(COOKIES_CACHE['default']),
+            "has_fresh_cookies": 'latest' in COOKIES_CACHE,
+            "fresh_cookie_length": len(COOKIES_CACHE.get('latest', '')) if 'latest' in COOKIES_CACHE else 0
+        }
     }
+
+# Initialize by getting fresh cookies when app starts
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting NetFree API server and initializing cookie cache")
+    try:
+        await get_fresh_cookies()
+    except Exception as e:
+        logger.warning(f"Failed to get initial fresh cookies: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting NetFree API server")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
