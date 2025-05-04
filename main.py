@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import base64
 import logging
@@ -128,13 +129,29 @@ async def get_fresh_cookies():
         logger.error(f"Error getting fresh cookies: {str(e)}")
         return COOKIES_CACHE['default']
 
+ROXIES = [
+    "http://40.76.69.94:8080",
+    "http://88.99.209.189:1234",
+    "http://67.43.228.251:21621",
+    "http://8.219.97.248:80",
+    "http://119.156.195.173:3128",
+    "http://34.102.48.89:8080",
+    "http://45.140.143.77:18080",
+    "http://3.110.60.103:80",
+    "http://200.174.198.86:8888",
+    "http://34.143.143.61:7777",
+    "http://72.10.160.173:11025",
+    "http://91.243.226.71:8080",
+    "http://44.220.205.79:8080"
+]
+
+def get_random_proxy():
+    return random.choice(PROXIES)
+
 def make_request(id: str, t: str, tm: str, use_fresh_cookies: bool = False):
     url = f'https://netfree2.cc/playlist.php?id={id}&t={t}&tm={tm}'
     logger.info(f"Making request to {url}")
-    
-    # Get a random user agent
-    user_agent = random.choice(USER_AGENTS)
-    
+
     headers = {
         'Accept': '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
@@ -147,52 +164,18 @@ def make_request(id: str, t: str, tm: str, use_fresh_cookies: bool = False):
         'Sec-Fetch-Mode': 'cors',
         'Sec-Fetch-Site': 'same-origin',
         'TE': 'trailers',
-        'User-Agent': user_agent
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
     }
 
-    # Handle cookies
-    cookie_string = COOKIES_CACHE.get('latest', COOKIES_CACHE['default']) if use_fresh_cookies else COOKIES_CACHE['default']
-    headers['Cookie'] = cookie_string
+    if not use_fresh_cookies:
+        headers['Cookie'] = 'user_token=c4e606ec3f66b93e8198a48c8c71e6b8; t_hash_t=4184321d319f63c93cff4c7588764623%3A%3A14b66f534e8c2fa68723668dead845ce%3A%3A1746367568%3A%3Ani; recentplay=81688854; 81688854=95%3A7065'
 
-    # Add X-Forwarded-For header with random IP to bypass IP-based restrictions
-    # This is a common technique, but use responsibly
-    forwarded_ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-    headers['X-Forwarded-For'] = forwarded_ip
-    
+    proxy = get_random_proxy()
+    logger.info(f"Using proxy: {proxy}")
+
     try:
-        # Add proxy support for deployments
-        proxies = {}
-        if os.environ.get('HTTP_PROXY'):
-            proxies['http'] = os.environ.get('HTTP_PROXY')
-        if os.environ.get('HTTPS_PROXY'):
-            proxies['https'] = os.environ.get('HTTPS_PROXY')
-            
-        logger.info(f"Headers being sent: {headers}")
-        logger.info(f"Using proxies: {proxies if proxies else 'None'}")
-        
-        response = requests.get(
-            url, 
-            headers=headers, 
-            timeout=15,
-            proxies=proxies if proxies else None,
-            allow_redirects=True
-        )
-        
+        response = requests.get(url, headers=headers, proxies={"http": proxy, "https": proxy}, timeout=10)
         logger.info(f"Response status code: {response.status_code}")
-        logger.info(f"Response headers: {response.headers}")
-        content_preview = response.content[:200] if isinstance(response.content, bytes) else "Non-bytes response"
-        logger.info(f"Response content preview: {content_preview}")
-
-        # Save any new cookies we received
-        if response.cookies and use_fresh_cookies:
-            new_cookies = '; '.join([f"{name}={value}" for name, value in response.cookies.items()])
-            if new_cookies:
-                if 'latest' in COOKIES_CACHE:
-                    COOKIES_CACHE['latest'] += '; ' + new_cookies
-                else:
-                    COOKIES_CACHE['latest'] = new_cookies
-                logger.info(f"Updated cookie cache with new cookies: {new_cookies}")
-
         return {
             'http_code': response.status_code,
             'response': response.content,
